@@ -6,6 +6,7 @@ Require Import Equality.
 Require Import FunctionalExtensionality.
 Require Import Tactics.
 
+
 (* Observations: mapping observables to values *)
 
 Inductive Val : Set := BVal : bool -> Val | RVal : R -> Val.
@@ -90,51 +91,70 @@ Definition Reqb (x y : R) : bool := Rleb x y && Rleb y x.
 
 (* Semantics of real expressions. *)
 
-Fixpoint Acc_sem {A} (f : nat -> A -> option A) (n : nat) (z : option A) : option A :=
+Fixpoint Acc_sem {A} (f : nat -> option A -> option A) (n : nat) (z : option A) : option A :=
   match n with
     | 0 => z
-    | S n' => Acc_sem f n' z >>= f n
+    | S n' => f n (Acc_sem f n' z)
   end.
 
 Reserved Notation "'E'[|' e '|]'" (at level 9).
 
 Import ListNotations.
 
-Definition OpSem (op : Op) (vs : list Val) : option Val :=
+Definition OpSem (op : Op) (args : list (option Val)) : option Val :=
   match op with
-    | Add => match vs with ([RVal x; RVal y ]) => Some (RVal (x + y)) | _ => None end
-    | Sub => match vs with ([RVal x; RVal y ]) => Some (RVal (x - y)) | _ => None end
-    | Mult => match vs with ([RVal x; RVal y ]) => Some (RVal (x * y)) | _ => None end
-    | Div => match vs with ([RVal x; RVal y ]) => Some (RVal (x / y)) | _ => None end
-    | And => match vs with ([BVal x; BVal y ]) => Some (BVal (x && y)) | _ => None end
-    | Or => match vs with ([BVal x; BVal y ]) => Some (BVal (x || y)) | _ => None end
-    | Less => match vs with ([RVal x; RVal y ]) => Some (BVal (Rltb x y)) | _ => None end
-    | Leq => match vs with ([RVal x; RVal y ]) => Some (BVal (Rleb x y)) | _ => None end
-    | Equal => match vs with ([RVal x; RVal y ]) => Some (BVal (Reqb x y)) | _ => None end
-    | BLit b => match vs with ([]) => Some (BVal b) | _ => None end
-    | RLit r => match vs with ([]) => Some (RVal r) | _ => None end
-    | Cond => match vs with
-                | ([BVal b; RVal x; RVal y ]) => Some (RVal (if b then x else y))
-                | ([BVal b; BVal x; BVal y ]) => Some (BVal (if b then x else y))
-                | _ => None end
-    | Neg => match vs with ([RVal x]) => Some (RVal (0 - x) %R) | _ => None end
-    | Not => match vs with ([BVal x]) => Some (BVal (negb x)) | _ => None end
+    | Cond => match args with
+                | [e1; e2; e3] => match e1 with
+                                      | Some (BVal true) => e2
+                                      | Some (BVal false) => e3
+                                      | _ => None
+                                  end
+                | _ => None
+              end
+    | And => match args with
+               | [e1;e2] => match e1, e2 with
+                              | Some (BVal true), y => y
+                              | x, Some (BVal true) => x
+                              | _, _ => None
+                            end
+               | _ => None
+             end
+    | Or => match args with
+              | [e1; e2] => match e1, e2 with
+                                | Some (BVal true), _ => Some (BVal true)
+                                | _ , Some (BVal true) => Some (BVal true)
+                                | Some (BVal false), Some (BVal false) => Some (BVal false)
+                                | _, _ => None
+                            end
+               | _ => None
+            end
+    | Add => match args with ([Some (RVal x); Some (RVal y)]) => Some (RVal (x + y)) | _ => None end
+    | Sub => match args with ([Some (RVal x); Some (RVal y)]) => Some (RVal (x - y)) | _ => None end
+    | Mult => match args with ([Some (RVal x); Some (RVal y)]) => Some (RVal (x * y)) | _ => None end
+    | Div => match args with ([Some (RVal x); Some (RVal y)]) => Some (RVal (x / y)) | _ => None end
+    | Less => match args with ([Some (RVal x); Some (RVal y)]) => Some (BVal (Rltb x y)) | _ => None end
+    | Leq => match args with ([Some (RVal x); Some (RVal y)]) => Some (BVal (Rleb x y)) | _ => None end
+    | Equal => match args with ([Some (RVal x); Some (RVal y)]) => Some (BVal (Reqb x y)) | _ => None end
+    | BLit b => match args with ([]) => Some (BVal b) | _ => None end
+    | RLit r => match args with ([]) => Some (RVal r) | _ => None end
+    | Neg => match args with ([Some (RVal x)]) => Some (RVal (0 - x) %R) | _ => None end
+    | Not => match args with ([Some (BVal x)]) => Some (BVal (negb x)) | _ => None end
   end.
 
 
-Definition Env := list Val.
+Definition Env := list (option Val).
 
 
 Fixpoint lookupEnv (v : Var) (rho : Env) : option Val :=
   match v, rho with
-    | V1, x::_ => Some x
+    | V1, x::_ => x
     | VS v, _::xs => lookupEnv v xs
     | _,_ => None
   end.
 
 Fixpoint Esem' (e : Exp) (rho : Env) (erho : ExtEnv) : option Val :=
     match e with
-      | OpE op args => sequence (map (fun e => E'[|e|] rho erho) args) >>= OpSem op
+      | OpE op args => OpSem op (map (fun e => E'[|e|] rho erho) args) 
       | Obs l i => erho l i
       | VarE v => lookupEnv v rho
       | Acc f l z => let erho' := adv_ext (- Z.of_nat l) erho
@@ -162,33 +182,67 @@ Qed.
 
 (* Semantic structures for contracts. *)
 
+
+Require Import FMapInterface.
+Require Import DecidableTypeEx.
+
+Module TwoParties := PairDecidableType Party Party.
+Module PartiesCurrency := PairDecidableType TwoParties Currency.
+
+
+Declare Module Map : FMapInterface.WS with Module E := PartiesCurrency.
+
+
+
+
+
 (* An elemtn of type [trans] represents a set of transfers that a
  contract specifies at a particular point in time. It can also be
  [None], which indicates that the set of transfers is undefined (read:
  "bottom"). *)
 
-Definition trans' := party -> party -> currency -> R.
+Definition trans' := Map.t R.
+
 
 Definition trans := option trans'.
 
 
 Open Scope R.
-Definition empty_trans' : trans' := fun p1 p2 c => 0.
+Definition empty_trans' : trans' := Map.empty R.
+Definition is_empty_trans (t : trans) : bool := match t with
+                                                     | None => false
+                                                     | Some t' => Map.is_empty t'
+                                                 end.
 Definition empty_trans : trans := Some empty_trans'.
 Definition bot_trans : trans := None.
 Definition singleton_trans' (p1 p2 : party) (c : currency) r : trans'
-  := fun p1' p2' c' => if eq_str p1 p2
-                       then 0
-                       else if eq_str p1 p1' && eq_str p2 p2' && eq_str c c'
-                            then r
-                            else if eq_str p1 p2' && eq_str p2 p1' && eq_str c c'
-                                 then -r
-                                 else 0.
+  := if Party.eq_dec p1 p2 then empty_trans'
+     else if Reqb  0 r then empty_trans' 
+     else Map.add ((p1,p2), c) r (Map.add ((p2,p1), c) r empty_trans').
+
 Definition singleton_trans (p1 p2 : party) (c : currency) r : trans  := Some (singleton_trans' p1 p2 c r).
-Definition add_trans' : trans' -> trans' -> trans' := fun t1 t2 p1 p2 c => (t1 p1 p2 c + t2 p1 p2 c).
-Definition add_trans : trans -> trans -> trans := liftM2 add_trans'.
-Definition scale_trans' : R -> trans' -> trans' := fun s t p1 p2 c => (t p1 p2 c * s).
-Definition scale_trans : option R -> trans -> trans := liftM2 scale_trans'.
+
+Definition Rplus' x y := match x, y with
+                           | None, y => y
+                           | x, None => x
+                           | Some x', Some y' => let r := Rplus x' y'
+                                                 in if Reqb 0 r then None else Some r
+                         end.
+
+Definition add_trans' : trans' -> trans' -> trans' := Map.map2 Rplus'.
+Definition add_trans (t1 t2 : trans) : trans := if is_empty_trans t1 then t2
+                                                else if is_empty_trans t2 then t1
+                                                     else liftM2 add_trans' t1 t2.
+
+Definition scale_trans' (r : R) (t: trans') : trans' := if Reqb 0 r then empty_trans'
+                                                        else Map.map (fun x => r * x) t.
+
+Definition is_zero_r (r : option R) : bool := match r with
+                                                 | None => false
+                                                 | Some r' => Reqb 0 r'
+                                              end.
+Definition scale_trans (r : option R) (t : trans) : trans := if is_zero_r r || is_empty_trans t
+                                                             then empty_trans else liftM2 scale_trans' r t.
 
 
 Lemma scale_empty_trans' r : scale_trans' r empty_trans' = empty_trans'.

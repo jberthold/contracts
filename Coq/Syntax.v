@@ -1,9 +1,13 @@
 Require Export Reals.
 Require Export String.
 Require Export Utils.
+Require Export DecidableType.
 
-Definition currency := string.
-Definition party := string.
+Declare Module Currency:DecidableType.
+Declare Module Party:DecidableType.
+
+Definition currency := Currency.t.
+Definition party := Party.t.
 
 
 Inductive Var : Set := V1 | VS (v:Var).
@@ -50,7 +54,7 @@ fix F (e : Exp) : P e :=
   end.
 
 
-Inductive Contr : Set :=
+Inductive Contr : Type :=
  | Zero : Contr
  | Transfer : party -> party -> currency -> Contr
  | Scale : Exp -> Contr -> Contr
